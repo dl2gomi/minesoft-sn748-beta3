@@ -75,6 +75,8 @@ class GenerationPipeline:
         self.mesh_generator = MeshGeneratorModule(settings.trellis.params)
         self.glb_converter = GLBConverter(settings.glb_converter)
         self._last_trellis_oom_retry = False
+        self._last_qwen_oom_retry = False
+        self._last_qwen_edit_skipped = False
 
         # Initialize Judge module
         if settings.judge.enabled:
@@ -121,6 +123,23 @@ class GenerationPipeline:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def _aggressive_cuda_cleanup(self) -> None:
+        """
+        Stronger CUDA cleanup used before OOM retries.
+        """
+        gc.collect()
+        if not torch.cuda.is_available():
+            return
+        try:
+            # Ensure queued kernels complete before cache operations.
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            # Releases inter-process cached blocks when possible.
+            torch.cuda.ipc_collect()
+        except Exception:
+            # Cleanup should never block the main flow.
+            pass
 
     async def warmup_generator(self) -> None:
         """Function for warming up the generator"""
@@ -183,6 +202,46 @@ class GenerationPipeline:
         """
 
 
+        def _is_cuda_oom(exc: BaseException) -> bool:
+            msg = str(exc).lower()
+            return (
+                isinstance(exc, torch.cuda.OutOfMemoryError)
+                or "out of memory" in msg
+                or "cuda" in msg
+                or "acceleratorerror" in msg
+            )
+
+        def _edit_with_oom_guard(prompting: object, prompt_image: Image.Image) -> tuple[ImagesTensor, bool]:
+            """
+            Try Qwen edit; on CUDA OOM clear cache and retry once.
+            Returns (edited_images, used_retry).
+            """
+            try:
+                out = self.qwen_edit.edit_image(
+                    request=ImageEditInput(
+                        model=self.qwen_pipeline,
+                        prompt_image=prompt_image,
+                        seed=seed,
+                        prompting=prompting,
+                    )
+                ).edited_images
+                return out, False
+            except Exception as exc:
+                if not _is_cuda_oom(exc):
+                    raise
+                logger.warning(f"Qwen edit OOM; retrying once after cache clear: {exc}")
+                self._last_qwen_oom_retry = True
+                self._clean_gpu_memory()
+                out = self.qwen_edit.edit_image(
+                    request=ImageEditInput(
+                        model=self.qwen_pipeline,
+                        prompt_image=prompt_image,
+                        seed=seed,
+                        prompting=prompting,
+                    )
+                ).edited_images
+                return out, True
+
         if self.settings.trellis.multiview:
             logger.info("Multiview mode: generating multiple views")
             views_prompt = self.prompting_library.promptings['views']
@@ -190,15 +249,18 @@ class GenerationPipeline:
             edited_images: list[ImageTensor] = []
             for prompt_text in views_prompt.prompt:
                 logger.debug(f"Editing view with prompt: {prompt_text}")
-                result = self.qwen_edit.edit_image(
-                    request=ImageEditInput(
-                        model=self.qwen_pipeline,
-                        prompt_image=image,
-                        seed=seed,
-                        prompting=prompt_text,
-                    )
-                )
-                edited_images.extend(images_tensor_to_tuple(result.edited_images))
+                try:
+                    edited_tensor, _ = _edit_with_oom_guard(prompt_text, image)
+                    edited_images.extend(images_tensor_to_tuple(edited_tensor))
+                except Exception as exc:
+                    if _is_cuda_oom(exc):
+                        logger.warning(
+                            f"Qwen edit OOM in multiview; falling back to original image only: {exc}"
+                        )
+                        self._last_qwen_edit_skipped = True
+                        self._clean_gpu_memory()
+                        return image_tensors_to_images_tensor([pil_to_image_tensor(image.copy())])
+                    raise
 
             original_image = image.copy()
             if edited_images:
@@ -212,16 +274,18 @@ class GenerationPipeline:
         logger.info("Base mode: single view with background cleaning and rotation")
         base_prompt = self.prompting_library.promptings['base']
         logger.debug(f"Editing base view with prompt: {base_prompt}")
-        return image_tensors_to_images_tensor(
-            self.qwen_edit.edit_image(
-                request=ImageEditInput(
-                    model=self.qwen_pipeline,
-                    prompt_image=image,
-                    seed=seed,
-                    prompting=base_prompt,
+        try:
+            edited_tensor, _ = _edit_with_oom_guard(base_prompt, image)
+            return image_tensors_to_images_tensor(edited_tensor)
+        except Exception as exc:
+            if _is_cuda_oom(exc):
+                logger.warning(
+                    f"Qwen edit OOM in base mode after retry; falling back to original image: {exc}"
                 )
-            ).edited_images
-        )
+                self._last_qwen_edit_skipped = True
+                self._clean_gpu_memory()
+                return image_tensors_to_images_tensor([pil_to_image_tensor(image.copy())])
+            raise
 
     async def generate_mesh(
         self,
@@ -240,6 +304,8 @@ class GenerationPipeline:
         if request.seed < 0:
             request.seed = secure_randint(0, 10000)
         set_random_seed(request.seed)
+        self._last_qwen_oom_retry = False
+        self._last_qwen_edit_skipped = False
 
         # Decode input image
         image = base64_to_image(request.prompt_image)
@@ -288,8 +354,9 @@ class GenerationPipeline:
                 raise
             logger.warning(f"Trellis OOM during mesh generation; retrying with lighter settings: {exc}")
             self._last_trellis_oom_retry = True
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            # Drop exception references and aggressively release CUDA caches before retry.
+            exc = None
+            self._aggressive_cuda_cleanup()
 
             default_num_samples = int(getattr(self.settings.trellis.params, "num_samples", 1) or 1)
             fallback = TrellisParams.Overrides(
@@ -496,6 +563,8 @@ class GenerationPipeline:
             image_edited_file_base64=image_edited_base64,
             image_without_background_file_base64=image_no_bg_base64,
             trellis_oom_retry=bool(self._last_trellis_oom_retry),
+            qwen_oom_retry=bool(self._last_qwen_oom_retry),
+            qwen_edit_skipped=bool(self._last_qwen_edit_skipped),
             trellis_pipeline_used=(
                 getattr(self._last_trellis_pipeline_used, "value", self._last_trellis_pipeline_used)
                 if self._last_trellis_pipeline_used is not None

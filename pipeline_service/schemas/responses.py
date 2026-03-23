@@ -11,6 +11,8 @@ class GenerationResponse(BaseModel):
     image_edited_file_base64: Optional[str] = None
     image_without_background_file_base64: Optional[str] = None
     trellis_oom_retry: Optional[bool] = None
+    qwen_oom_retry: Optional[bool] = None
+    qwen_edit_skipped: Optional[bool] = None
     trellis_pipeline_used: Optional[str] = None
     uv_unwrap_mode: Optional[str] = None
     uv_unwrap_reason: Optional[str] = None
@@ -29,6 +31,8 @@ class GenerationResponse(BaseModel):
                 "image_edited_file_base64": "base64_encoded_image_edited_file",
                 "image_without_background_file_base64": "base64_encoded_image_without_background_file",
                 "trellis_oom_retry": True,
+                "qwen_oom_retry": True,
+                "qwen_edit_skipped": False,
                 "trellis_pipeline_used": "1024_cascade",
                 "uv_unwrap_mode": "xatlas",
                 "uv_unwrap_reason": None,

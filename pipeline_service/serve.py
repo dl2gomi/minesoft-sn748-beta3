@@ -33,6 +33,10 @@ def _build_round_executor_headers(result: GenerationResponse, buffer_size: int) 
         headers["X-Generation-Time"] = f"{result.generation_time:.3f}"
     if result.trellis_oom_retry is not None:
         headers["X-Trellis-OOM-Retry"] = "true" if result.trellis_oom_retry else "false"
+    if result.qwen_oom_retry is not None:
+        headers["X-Qwen-OOM-Retry"] = "true" if result.qwen_oom_retry else "false"
+    if result.qwen_edit_skipped is not None:
+        headers["X-Qwen-Edit-Skipped"] = "true" if result.qwen_edit_skipped else "false"
     if result.trellis_pipeline_used:
         headers["X-Trellis-Pipeline-Used"] = str(result.trellis_pipeline_used)
     if result.uv_unwrap_mode:
