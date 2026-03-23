@@ -94,7 +94,7 @@ judge:
   vllm_revision: "17193d2147da3acd0da358eb251ef862b47e7545"
   vllm_api_key: "local"
   vllm_url: "http://localhost:8095/v1"
-  gpu_memory_utilization: 0.175
+  gpu_memory_utilization: 0.185
   max_model_len: 8096
   max_num_seqs: 2
   

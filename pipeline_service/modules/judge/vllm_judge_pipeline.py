@@ -104,7 +104,7 @@ class VllmJudgePipeline(JudgePipeline):
                 model=self.settings.vllm_model_name,
                 messages=messages,
                 temperature=0.0,
-                max_tokens=32,
+                max_tokens=1024,
                 response_format=response_format,
                 seed=seed,
             )
