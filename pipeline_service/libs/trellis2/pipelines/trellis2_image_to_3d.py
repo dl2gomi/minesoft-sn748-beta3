@@ -11,8 +11,7 @@ from ..modules.sparse import SparseTensor
 from ..modules import image_feature_extractor
 from ..representations import Mesh, MeshWithVoxel
 from geometry.mesh.schemas import MeshData
-from geometry.mesh.parallel_shells import remove_parallel_internal_shells
-from geometry.mesh.internal_shells import remove_internal_enclosed_shells
+from geometry.mesh.shell_cleanup import run_trellis_shell_cleanup
 from logger_config import logger
 
 
@@ -451,42 +450,27 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             del shape_slat_i, tex_slat_i, subs
             torch.cuda.empty_cache()
 
-            for m, v in zip(meshes, tex_voxels):
+            n_meshes = len(meshes)
+            for mesh_i, (m, v) in enumerate(zip(meshes, tex_voxels)):
                 m.fill_holes()
-                # Trellis-stage shell cleanup (before converter) to cut inner shells early.
+                # Shell cleanup (single split): parallel = offset duplicate wall vs largest component;
+                # internal = tiny fragments + inside watertight larger keeper. Both are "internal"
+                # geometry; tests differ (k-NN / containment). See geometry.mesh.shell_cleanup.
                 mesh_data = MeshData(vertices=m.vertices, faces=m.faces)
-                pre_faces = int(mesh_data.faces.shape[0])
-                pre_verts = int(mesh_data.vertices.shape[0])
-
-                if parallel_params.get("enabled", True):
-                    t0 = time.time()
-                    mesh_data = remove_parallel_internal_shells(
-                        mesh_data,
-                        sample_count_outer=int(parallel_params.get("sample_count_outer", 3000)),
-                        sample_count_inner=int(parallel_params.get("sample_count_inner", 1200)),
-                        dist_ratio=float(parallel_params.get("dist_ratio", 0.01)),
-                        score_threshold=float(parallel_params.get("score_threshold", 0.40)),
-                        min_faces_to_check=int(parallel_params.get("min_faces_to_check", 1000)),
-                    )
-                    logger.info(
-                        f"Trellis parallel-shell cleanup | faces {pre_faces}->{int(mesh_data.faces.shape[0])} "
-                        f"verts {pre_verts}->{int(mesh_data.vertices.shape[0])} time={time.time() - t0:.2f}s"
-                    )
-                    pre_faces = int(mesh_data.faces.shape[0])
-                    pre_verts = int(mesh_data.vertices.shape[0])
-
-                if internal_params.get("enabled", True):
-                    t1 = time.time()
-                    mesh_data = remove_internal_enclosed_shells(
-                        mesh_data,
-                        min_component_faces=int(internal_params.get("min_component_faces", 64)),
-                        max_components_to_check=int(internal_params.get("max_components_to_check", 64)),
-                        min_face_ratio_to_keep=float(internal_params.get("min_face_ratio_to_keep", 0.005)),
-                    )
-                    logger.info(
-                        f"Trellis internal-shell cleanup | faces {pre_faces}->{int(mesh_data.faces.shape[0])} "
-                        f"verts {pre_verts}->{int(mesh_data.vertices.shape[0])} time={time.time() - t1:.2f}s"
-                    )
+                f0 = int(mesh_data.faces.shape[0])
+                v0 = int(mesh_data.vertices.shape[0])
+                t_shell = time.time()
+                mesh_data = run_trellis_shell_cleanup(
+                    mesh_data,
+                    parallel=parallel_params,
+                    internal=internal_params,
+                )
+                f1 = int(mesh_data.faces.shape[0])
+                v1 = int(mesh_data.vertices.shape[0])
+                logger.info(
+                    f"Trellis shell_cleanup | mesh {mesh_i + 1}/{n_meshes} | "
+                    f"faces {f0}->{f1} verts {v0}->{v1} | {time.time() - t_shell:.2f}s"
+                )
 
                 m.vertices = mesh_data.vertices
                 m.faces = mesh_data.faces

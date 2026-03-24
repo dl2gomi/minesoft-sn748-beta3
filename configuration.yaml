@@ -37,9 +37,14 @@ trellis:
         enabled: true
         sample_count_outer: 3000
         sample_count_inner: 1200
-        dist_ratio: 0.01
-        score_threshold: 0.40
+        dist_ratio: 0.012
+        score_threshold: 0.35
         min_faces_to_check: 1000
+        max_secondary_components_to_check: 512
+        knn_outer_neighbors: 56
+        opposing_dot: -0.22
+        opposing_dot_relaxed: -0.12
+        distance_relax: 2.25
       internal:
         enabled: true
         min_component_faces: 64

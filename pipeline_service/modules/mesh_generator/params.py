@@ -14,8 +14,13 @@ class ShellCleanupParallelParams(OverridableModel):
     sample_count_outer: int = 3000
     sample_count_inner: int = 1200
     dist_ratio: float = 0.01
-    score_threshold: float = 0.40
+    score_threshold: float = 0.35
     min_faces_to_check: int = 1000
+    max_secondary_components_to_check: int = 512
+    knn_outer_neighbors: int = 56
+    opposing_dot: float = -0.22
+    opposing_dot_relaxed: float = -0.12
+    distance_relax: float = 2.25
 
 
 class ShellCleanupInternalParams(OverridableModel):
