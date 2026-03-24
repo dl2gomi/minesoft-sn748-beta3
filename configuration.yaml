@@ -32,6 +32,19 @@ trellis:
     pipeline_type: "1024_cascade"  # "512_simple", "1024_cascade"
     mode: "multidiffusion"  # "singleview", "multiview"
     num_samples: 2
+    shell_cleanup:
+      parallel:
+        enabled: true
+        sample_count_outer: 3000
+        sample_count_inner: 1200
+        dist_ratio: 0.01
+        score_threshold: 0.40
+        min_faces_to_check: 1000
+      internal:
+        enabled: true
+        min_component_faces: 64
+        max_components_to_check: 64
+        min_face_ratio_to_keep: 0.005
 
 # Qwen model settings
 qwen:

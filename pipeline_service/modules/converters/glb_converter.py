@@ -12,7 +12,6 @@ from torchvision.transforms.functional import to_pil_image
 from geometry.mesh.schemas import DEFAULT_AABB, MeshData, MeshDataWithAttributeGrid, AttributeGrid
 from geometry.texturing.dithering import bayer_dither_pattern
 from geometry.mesh.utils import sort_mesh, map_vertices_positions, count_boundary_loops
-from geometry.mesh.internal_shells import remove_internal_enclosed_shells
 from geometry.mesh.subdivisions import subdivide_egdes
 from geometry.mesh.smoothing import taubin_smooth
 from geometry.texturing.utils import dilate_attributes, map_mesh_rasterization, rasterize_mesh_data, sample_grid_attributes
@@ -64,7 +63,6 @@ class GLBConverter:
             mesh_data = self._remesh_mesh(original_mesh_data, params)
         else:
             mesh_data = self._cleanup_mesh(original_mesh_data, params)
-        mesh_data = remove_internal_enclosed_shells(mesh_data)
             
         # 3. UV unwrap the mesh
         mesh_data = self._uv_unwrap_mesh(mesh_data, params)

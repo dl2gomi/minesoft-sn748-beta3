@@ -3,12 +3,17 @@ from contextlib import contextmanager
 import torch
 import torch.nn as nn
 import numpy as np
+import time
 from PIL import Image
 from .base import Pipeline
 from . import samplers, rembg
 from ..modules.sparse import SparseTensor
 from ..modules import image_feature_extractor
 from ..representations import Mesh, MeshWithVoxel
+from geometry.mesh.schemas import MeshData
+from geometry.mesh.parallel_shells import remove_parallel_internal_shells
+from geometry.mesh.internal_shells import remove_internal_enclosed_shells
+from logger_config import logger
 
 
 class Trellis2ImageTo3DPipeline(Pipeline):
@@ -416,6 +421,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         shape_slat: SparseTensor,
         tex_slat: SparseTensor,
         resolution: int,
+        shell_cleanup_params: Optional[dict] = None,
     ) -> List[MeshWithVoxel]:
         """
         Decode the latent codes.
@@ -432,6 +438,9 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             )
 
         out_mesh = []
+        shell_cleanup_params = shell_cleanup_params or {}
+        parallel_params = (shell_cleanup_params.get("parallel") or {})
+        internal_params = (shell_cleanup_params.get("internal") or {})
 
         for sample_idx in range(shape_slat.shape[0]):
             shape_slat_i = shape_slat[sample_idx]
@@ -444,6 +453,43 @@ class Trellis2ImageTo3DPipeline(Pipeline):
 
             for m, v in zip(meshes, tex_voxels):
                 m.fill_holes()
+                # Trellis-stage shell cleanup (before converter) to cut inner shells early.
+                mesh_data = MeshData(vertices=m.vertices, faces=m.faces)
+                pre_faces = int(mesh_data.faces.shape[0])
+                pre_verts = int(mesh_data.vertices.shape[0])
+
+                if parallel_params.get("enabled", True):
+                    t0 = time.time()
+                    mesh_data = remove_parallel_internal_shells(
+                        mesh_data,
+                        sample_count_outer=int(parallel_params.get("sample_count_outer", 3000)),
+                        sample_count_inner=int(parallel_params.get("sample_count_inner", 1200)),
+                        dist_ratio=float(parallel_params.get("dist_ratio", 0.01)),
+                        score_threshold=float(parallel_params.get("score_threshold", 0.40)),
+                        min_faces_to_check=int(parallel_params.get("min_faces_to_check", 1000)),
+                    )
+                    logger.info(
+                        f"Trellis parallel-shell cleanup | faces {pre_faces}->{int(mesh_data.faces.shape[0])} "
+                        f"verts {pre_verts}->{int(mesh_data.vertices.shape[0])} time={time.time() - t0:.2f}s"
+                    )
+                    pre_faces = int(mesh_data.faces.shape[0])
+                    pre_verts = int(mesh_data.vertices.shape[0])
+
+                if internal_params.get("enabled", True):
+                    t1 = time.time()
+                    mesh_data = remove_internal_enclosed_shells(
+                        mesh_data,
+                        min_component_faces=int(internal_params.get("min_component_faces", 64)),
+                        max_components_to_check=int(internal_params.get("max_components_to_check", 64)),
+                        min_face_ratio_to_keep=float(internal_params.get("min_face_ratio_to_keep", 0.005)),
+                    )
+                    logger.info(
+                        f"Trellis internal-shell cleanup | faces {pre_faces}->{int(mesh_data.faces.shape[0])} "
+                        f"verts {pre_verts}->{int(mesh_data.vertices.shape[0])} time={time.time() - t1:.2f}s"
+                    )
+
+                m.vertices = mesh_data.vertices
+                m.faces = mesh_data.faces
                 out_mesh.append(
                     MeshWithVoxel(
                         m.vertices, m.faces,
@@ -553,6 +599,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         return_latent: bool = False,
         pipeline_type: Optional[str] = None,
         max_num_tokens: int = 49152,
+        shell_cleanup_params: Optional[dict] = None,
     ) -> List[MeshWithVoxel]:
         """
         Run the pipeline.
@@ -653,7 +700,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                 generator=generator
             )
         torch.cuda.empty_cache()
-        out_mesh = self.decode_latent(shape_slat, tex_slat, res)
+        out_mesh = self.decode_latent(shape_slat, tex_slat, res, shell_cleanup_params=shell_cleanup_params)
         if return_latent:
             return out_mesh, (shape_slat, tex_slat, res)
         else:
@@ -672,6 +719,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         pipeline_type: Optional[str] = None,
         max_num_tokens: int = 49152,
         mode: Literal['stochastic', 'multidiffusion'] = 'stochastic',
+        shell_cleanup_params: Optional[dict] = None,
     ) -> List[MeshWithVoxel]:
         """
         Run the pipeline with multiple images as condition.
@@ -791,7 +839,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                 )
 
         torch.cuda.empty_cache()
-        out_mesh = self.decode_latent(shape_slat, tex_slat, res)
+        out_mesh = self.decode_latent(shape_slat, tex_slat, res, shell_cleanup_params=shell_cleanup_params)
         if return_latent:
             return out_mesh, (shape_slat, tex_slat, res)
         else:

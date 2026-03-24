@@ -9,6 +9,27 @@ class SamplerParams(OverridableModel):
     guidance_strength: float = Field(default=3.0, validation_alias=AliasChoices("guidance_strength", "cfg_strength"))
 
 
+class ShellCleanupParallelParams(OverridableModel):
+    enabled: bool = True
+    sample_count_outer: int = 3000
+    sample_count_inner: int = 1200
+    dist_ratio: float = 0.01
+    score_threshold: float = 0.40
+    min_faces_to_check: int = 1000
+
+
+class ShellCleanupInternalParams(OverridableModel):
+    enabled: bool = True
+    min_component_faces: int = 64
+    max_components_to_check: int = 64
+    min_face_ratio_to_keep: float = 0.005
+
+
+class ShellCleanupParams(OverridableModel):
+    parallel: ShellCleanupParallelParams = ShellCleanupParallelParams()
+    internal: ShellCleanupInternalParams = ShellCleanupInternalParams()
+
+
 class TrellisParams(OverridableModel):
     """TRELLIS.2 parameters with automatic fallback to settings."""
     sparse_structure: SamplerParams = SamplerParams(steps=12, guidance_strength=7.5)
@@ -18,5 +39,6 @@ class TrellisParams(OverridableModel):
     mode: TrellisMode = TrellisMode.STOCHASTIC  # Currently unused in TRELLIS.2
     max_num_tokens: int = 49152
     num_samples: int = 1
+    shell_cleanup: ShellCleanupParams = ShellCleanupParams()
     
 TrellisParamsOverrides: TypeAlias = TrellisParams.Overrides
