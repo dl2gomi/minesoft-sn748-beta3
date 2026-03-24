@@ -51,6 +51,9 @@ RUN python -m pip install --ignore-installed -r /tmp/requirements.txt
 # Install Kaolin
 RUN pip install kaolin==0.18.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html
 
+# Install PyTorch3D (used by perceptual refinement phase)
+RUN pip install --no-build-isolation git+https://github.com/facebookresearch/pytorch3d.git@v0.7.8
+
 # Flash Attention 2.8.3 
 RUN python -m pip install \
     https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp311-cp311-linux_x86_64.whl

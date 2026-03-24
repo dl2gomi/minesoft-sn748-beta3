@@ -4,7 +4,7 @@ from modules.background_removal.background_removal_pipeline import BackgroundRem
 from modules.background_removal.params import BackgroundRemovalParamsOverrides
 from pydantic import BaseModel
 from schemas.internal import Internal
-from schemas.types import ImageTensor, ImagesTensor
+from schemas.types import ImageTensor, ImagesTensor, FloatTensor
 
 
 class BackgroundRemovalInput(BaseModel):
@@ -17,3 +17,4 @@ class BackgroundRemovalInput(BaseModel):
 class BackgroundRemovalOutput(BaseModel):
     """Output from background removal."""
     images: Tuple[ImageTensor, ...]
+    alpha_masks: Tuple[FloatTensor, ...]

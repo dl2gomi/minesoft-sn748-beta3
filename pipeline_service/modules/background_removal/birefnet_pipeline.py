@@ -34,5 +34,6 @@ class BirefNetBackgroundRemovalPipeline(BackgroundRemovalPipeline):
 
         with torch.no_grad():
             preds = self.model(input_tensor)[-1].sigmoid()
-            mask = preds[:, :1].mul_(255).round_().div_(255).float()
+            # Keep continuous probabilities; quantizing to 0/1 destroys transparency cues.
+            mask = preds[:, :1].float().clamp_(0.0, 1.0)
         return torch.cat([rgb_tensor, mask], dim=1)

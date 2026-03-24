@@ -4,6 +4,7 @@ import time
 
 from modules.background_removal.params import BackgroundRemovalParams
 import torch
+import torch.nn.functional as F
 from torchvision.transforms.functional import crop, resize, resized_crop
 
 from logger_config import logger
@@ -27,18 +28,27 @@ class BackgroundRemovalModule:
 
         images = list(request.images)
         outputs: list[ImageTensor] = []
+        alpha_masks: list[torch.Tensor] = []
 
         for image in images:
             if self._has_nonopaque_alpha(image):
                 outputs.append(image[..., :3].contiguous())
+                alpha_masks.append(image[..., 3].contiguous() if image.shape[-1] == 4 else torch.ones_like(image[..., 0]))
                 continue
 
             image_tensor = self._prepare_model_input_tensor(image, params.input_image_size)
             tensor_rgba_batch = model.predict_rgba(image_tensor.unsqueeze(0))
             tensor_rgba = tensor_rgba_batch[0]
             cropped_rgba = self._crop_and_center(tensor_rgba, params=params)
-            cropped_rgb = self._blackout_background(cropped_rgba)
+            # Keep original RGB (do NOT blackout) and carry alpha separately.
+            # For transparent objects, blacking RGB causes background-color artifacts in later texture stages.
+            soft_alpha = self._ensure_soft_alpha(cropped_rgba[3])
+            hard_alpha = (soft_alpha > 0.5).float()
+            cropped_rgba[3] = soft_alpha
+            # Trellis input should be foreground-masked RGB with thresholded alpha.
+            cropped_rgb = cropped_rgba[:3] * hard_alpha.unsqueeze(0)
             outputs.append(cropped_rgb.permute(1, 2, 0).contiguous())
+            alpha_masks.append(soft_alpha.contiguous())
 
         removal_time = time.time() - start_time
         logger.success(
@@ -46,7 +56,7 @@ class BackgroundRemovalModule:
             f"Images without background: {len(outputs)}"
         )
 
-        return BackgroundRemovalOutput(images=tuple(outputs))
+        return BackgroundRemovalOutput(images=tuple(outputs), alpha_masks=tuple(alpha_masks))
 
     def _has_nonopaque_alpha(self, image: ImageTensor) -> bool:
         if image.shape[-1] != 4:
@@ -66,7 +76,9 @@ class BackgroundRemovalModule:
     def _crop_and_center(self, tensor_rgba: ImageCHWTensor, params: BackgroundRemovalParams) -> ImageCHWTensor:
         mask = tensor_rgba[3]
 
-        bbox_indices = torch.argwhere(mask > 0.8)
+        # Use an adaptive low threshold to avoid dropping transparent/soft regions.
+        fg_threshold = max(0.05, float(mask.max().item()) * 0.1)
+        bbox_indices = torch.argwhere(mask > fg_threshold)
         if len(bbox_indices) == 0:
             crop_args = dict(top=0, left=0, height=mask.shape[1], width=mask.shape[0])
         else:
@@ -99,6 +111,23 @@ class BackgroundRemovalModule:
         if params.output_image_size is not None:
             return resized_crop(tensor_rgba, **crop_args, size=params.output_image_size, antialias=False)
         return crop(tensor_rgba, **crop_args)
+
+    @staticmethod
+    def _ensure_soft_alpha(alpha: torch.Tensor) -> torch.Tensor:
+        """
+        Preserve soft alpha. If mask is nearly binary, soften only around boundaries
+        to avoid fully hard mattes that break semi-transparent objects.
+        """
+        alpha = alpha.float().clamp(0.0, 1.0)
+        near_binary_ratio = ((alpha < 0.02) | (alpha > 0.98)).float().mean().item()
+        if near_binary_ratio < 0.995:
+            return alpha
+
+        # Lightweight 5x5 box blur for edge softening.
+        blurred = F.avg_pool2d(alpha.unsqueeze(0).unsqueeze(0), kernel_size=5, stride=1, padding=2).squeeze(0).squeeze(0)
+        # Apply softening only in uncertain transition zone to keep foreground/background stable.
+        transition = (blurred > 0.01) & (blurred < 0.99)
+        return torch.where(transition, blurred, alpha).clamp(0.0, 1.0)
 
     def _blackout_background(self, tensor_rgba: ImageCHWTensor) -> ImageCHWTensor:
         mask = tensor_rgba[3]

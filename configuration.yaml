@@ -82,9 +82,26 @@ glb_converter:
     vertex_reproject: 0.1
   texture:
     texture_size: 2048
-    alpha_mode: "OPAQUE"
+    alpha_mode: "BLEND"
     alpha_gamma: 2.0
   gpu: 0
+
+# Perceptual refinement settings (PyTorch3D, between Trellis and CuMesh)
+perceptual_refiner:
+  enabled: true
+  iterations: 120
+  image_size: 256
+  lr: 0.001
+  max_vertex_shift: 0.08
+  raster_blur_radius: 0.0001
+  raster_faces_per_pixel: 32
+  w_silhouette: 1.0
+  w_laplacian: 0.03
+  w_normal: 0.01
+  w_edge: 0.02
+  refine_alpha_attr: true
+  alpha_refine_steps: 40
+  alpha_refine_lr: 0.05
 
 # Judge model settings
 judge:

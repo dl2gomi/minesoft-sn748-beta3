@@ -7,7 +7,6 @@ import kaolin
 from PIL import Image
 import trimesh
 import trimesh.visual
-import torch.nn.functional as F
 from torchvision.transforms.functional import to_pil_image
 from geometry.mesh.schemas import DEFAULT_AABB, MeshData, MeshDataWithAttributeGrid, AttributeGrid
 from geometry.texturing.dithering import bayer_dither_pattern
@@ -45,7 +44,13 @@ class GLBConverter:
         self.default_params = params
         self.logger = logger
         self.last_uv_unwrap_info: dict | None = None
-    
+        self.alpha_hint_mask: Optional[torch.Tensor] = None
+        self.last_textures: dict[str, Image.Image] = {}
+
+    def set_alpha_hint_mask(self, alpha_mask: Optional[torch.Tensor]) -> None:
+        """Optional soft alpha hint from BiRefNet. Shape: (H, W) in [0,1]."""
+        self.alpha_hint_mask = alpha_mask
+
     def convert(self, request: GLBConverterInput) -> GLBConverterOutput:
         """Convert the given mesh to a textured GLB format."""
         mesh = request.mesh
@@ -54,6 +59,7 @@ class GLBConverter:
         params = self.default_params.overrided(request.params)
         logger.debug(f"Using GLB conversion parameters: {params}")
         self.last_uv_unwrap_info = None
+        self.last_textures = {}
 
         # 1. Prepare original mesh data with BVH
         original_mesh_data = self._prepare_original_mesh(mesh)
@@ -375,11 +381,16 @@ class GLBConverter:
 
         # Adjust alpha with gamma
         alpha = alpha.pow(params.texture.alpha_gamma)
+        # IMPORTANT:
+        # alpha_hint_mask is in input image space, while this alpha is in UV texture space.
+        # Directly resizing/applying the image-space mask here is invalid and causes mask imprint artifacts.
+        # Keep UV-space alpha from baked attributes only.
         
         # Handle alpha mode
         alpha_mode = params.texture.alpha_mode
         if alpha_mode == AlphaMode.BLEND:
-            alpha_mode = AlphaMode.OPAQUE if np.all(alpha == 255) else alpha_mode
+            # alpha is torch tensor in [0,1]; keep torch-native check.
+            alpha_mode = AlphaMode.OPAQUE if torch.all(alpha >= (1.0 - 1.0 / 255.0)).item() else alpha_mode
 
         # Apply alpha dithering if flag is set
         if alpha_mode == AlphaMode.DITHER:
@@ -394,6 +405,10 @@ class GLBConverter:
 
         base_color_texture = to_pil_image(rgba.permute(2,0,1).cpu())
         orm_texture = to_pil_image(orm.permute(2,0,1).cpu())
+        self.last_textures = {
+            "albedo": base_color_texture.copy(),
+            "orm": orm_texture.copy(),
+        }
         
         logger.debug(f"Done finalizing mesh textures | Time: {time.time() - start_time:.2f}s")
         return base_color_texture, orm_texture

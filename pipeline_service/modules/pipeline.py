@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import time
+from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
 from PIL import Image
@@ -37,6 +38,7 @@ from modules.mesh_generator.mesh_generator_module import MeshGeneratorModule
 from modules.mesh_generator.enums import TrellisPipeType
 from modules.mesh_generator.trellis_pipeline import Trellis2MeshPipeline
 from modules.converters.glb_converter import GLBConverter
+from modules.perceptual_refiner.refiner import PerceptualRefiner
 from modules.judge.duel_manager import DuelManager
 from modules.judge.vllm_judge_pipeline import VllmJudgePipeline
 from modules.judge.schemas import JudgeInput
@@ -74,6 +76,7 @@ class GenerationPipeline:
         self.mesh_pipeline = Trellis2MeshPipeline(settings.trellis, settings.model_versions)
         self.mesh_generator = MeshGeneratorModule(settings.trellis.params)
         self.glb_converter = GLBConverter(settings.glb_converter)
+        self.perceptual_refiner = PerceptualRefiner(settings.perceptual_refiner)
         self._last_trellis_oom_retry = False
         self._last_qwen_oom_retry = False
         self._last_qwen_edit_skipped = False
@@ -140,6 +143,58 @@ class GenerationPipeline:
         except Exception:
             # Cleanup should never block the main flow.
             pass
+
+    def _save_debug_image_tensor(self, image: torch.Tensor, path: Path) -> None:
+        try:
+            img = image.detach().float().cpu()
+            if img.ndim == 2:
+                img = img.clamp(0.0, 1.0)
+            else:
+                img = img.clamp(0.0, 1.0)
+            pil = image_tensor_to_pil(img if img.ndim == 3 else torch.stack([img, img, img], dim=-1))
+            pil.save(path, format="PNG")
+        except Exception as exc:
+            logger.warning(f"Failed to save debug image {path}: {exc}")
+
+    def _save_debug_phase_outputs(
+        self,
+        *,
+        seed: int,
+        images_edited: ImagesTensor,
+        images_without_background: ImagesTensor,
+        alpha_hint_mask: Optional[torch.Tensor],
+        alpha_hard_mask: Optional[torch.Tensor] = None,
+        textures: Optional[dict[str, Image.Image]] = None,
+        candidate_idx: Optional[int] = None,
+    ) -> None:
+        # Temporary debug dump path (no extra folders; keep in configured output root)
+        debug_dir = Path(self.settings.output.output_dir)
+        suffix = f"_c{candidate_idx}" if candidate_idx is not None else ""
+        try:
+            if len(images_edited) > 0:
+                self._save_debug_image_tensor(images_edited[0], debug_dir / f"qwen_edited_seed{seed}{suffix}.png")
+            if len(images_without_background) > 0:
+                self._save_debug_image_tensor(images_without_background[0], debug_dir / f"foreground_seed{seed}{suffix}.png")
+            if alpha_hint_mask is not None:
+                alpha = alpha_hint_mask.detach().float().cpu().clamp(0.0, 1.0)
+                if alpha.ndim == 3:
+                    alpha = alpha[..., 0]
+                alpha_rgb = torch.stack([alpha, alpha, alpha], dim=-1)
+                self._save_debug_image_tensor(alpha_rgb, debug_dir / f"alpha_mask_seed{seed}{suffix}.png")
+            if alpha_hard_mask is not None:
+                alpha_hard = alpha_hard_mask.detach().float().cpu().clamp(0.0, 1.0)
+                if alpha_hard.ndim == 3:
+                    alpha_hard = alpha_hard[..., 0]
+                alpha_hard_rgb = torch.stack([alpha_hard, alpha_hard, alpha_hard], dim=-1)
+                self._save_debug_image_tensor(alpha_hard_rgb, debug_dir / f"alpha_mask_hard_seed{seed}{suffix}.png")
+            if textures:
+                for name, image in textures.items():
+                    try:
+                        image.save(debug_dir / f"phase_texture_{name}_seed{seed}{suffix}.png", format="PNG")
+                    except Exception as exc:
+                        logger.warning(f"Failed to save debug texture {name}: {exc}")
+        except Exception as exc:
+            logger.warning(f"Failed writing debug phase outputs: {exc}")
 
     async def warmup_generator(self) -> None:
         """Function for warming up the generator"""
@@ -290,7 +345,7 @@ class GenerationPipeline:
     async def generate_mesh(
         self,
         request: GenerationRequest,
-    ) -> Tuple[TrellisOutput, Tuple[ImageTensor, ...], Tuple[ImageTensor, ...]]:
+    ) -> Tuple[TrellisOutput, Tuple[ImageTensor, ...], Tuple[ImageTensor, ...], Optional[torch.Tensor]]:
         """
         Generate mesh from Trellis pipeline, along with processed images.
 
@@ -298,7 +353,7 @@ class GenerationPipeline:
             request: Generation request with prompt and settings
 
         Returns:
-            Tuple of (mesh, images_edited, images_without_background)
+            Tuple of (mesh, images_edited, images_without_background, alpha_hint_mask)
         """
         # Set seed
         if request.seed < 0:
@@ -321,6 +376,25 @@ class GenerationPipeline:
             )
         )
         images_without_background = background_removal_result.images
+        alpha_hint_mask = background_removal_result.alpha_masks[0] if background_removal_result.alpha_masks else None
+        alpha_hard_mask = (alpha_hint_mask > 0.5).float() if alpha_hint_mask is not None else None
+        if alpha_hint_mask is not None:
+            alpha_min = float(alpha_hint_mask.min().item())
+            alpha_max = float(alpha_hint_mask.max().item())
+            alpha_mean = float(alpha_hint_mask.mean().item())
+            alpha_soft_ratio = float(((alpha_hint_mask > 0.02) & (alpha_hint_mask < 0.98)).float().mean().item())
+            logger.info(
+                "RMBG alpha stats | "
+                f"min={alpha_min:.4f} max={alpha_max:.4f} mean={alpha_mean:.4f} "
+                f"soft_ratio={alpha_soft_ratio:.4f}"
+            )
+        self._save_debug_phase_outputs(
+            seed=request.seed,
+            images_edited=images_edited,
+            images_without_background=images_without_background,
+            alpha_hint_mask=alpha_hint_mask,
+            alpha_hard_mask=alpha_hard_mask,
+        )
 
         # Resolve Trellis parameters from request
         trellis_params: TrellisParams = request.trellis_params
@@ -376,7 +450,12 @@ class GenerationPipeline:
                 ),
             )
 
-        return mesh_output, images_edited, images_without_background
+        # Phase 2: perceptual refinement (PyTorch3D) before CuMesh conversion.
+        if mesh_output and alpha_hint_mask is not None:
+            refined_meshes = self.perceptual_refiner.refine(mesh_output.meshes, alpha_hint_mask)
+            mesh_output = TrellisOutput(meshes=refined_meshes)
+
+        return mesh_output, images_edited, images_without_background, alpha_hint_mask
 
     def convert_mesh_to_glb(self, request: GLBConverterInput) -> bytes:
         """
@@ -491,7 +570,8 @@ class GenerationPipeline:
         logger.info(f"Request received | Seed: {request.seed} | Prompt Type: {request.prompt_type.value}")
 
         # Generate mesh and get processed images
-        mesh_output, images_edited, images_without_background = await self.generate_mesh(request)
+        mesh_output, images_edited, images_without_background, alpha_hint_mask = await self.generate_mesh(request)
+        alpha_hard_mask = (alpha_hint_mask > 0.5).float() if alpha_hint_mask is not None else None
 
         glb_mesh = None
         grid_view_winner = None
@@ -502,7 +582,8 @@ class GenerationPipeline:
         glb_meshes: list[bytes] = []
         uv_infos: list[dict | None] = []
         if mesh_output:
-            for mesh in mesh_output.meshes:
+            for i, mesh in enumerate(mesh_output.meshes):
+                self.glb_converter.set_alpha_hint_mask(alpha_hint_mask)
                 glb_output = self.convert_mesh_to_glb(
                     request=GLBConverterInput(
                         mesh=mesh,
@@ -511,6 +592,16 @@ class GenerationPipeline:
                 )
                 glb_meshes.append(glb_output)
                 uv_infos.append(getattr(self.glb_converter, "last_uv_unwrap_info", None))
+                self._save_debug_phase_outputs(
+                    seed=request.seed,
+                    images_edited=images_edited,
+                    images_without_background=images_without_background,
+                    alpha_hint_mask=alpha_hint_mask,
+                    alpha_hard_mask=alpha_hard_mask,
+                    textures=getattr(self.glb_converter, "last_textures", None),
+                    candidate_idx=i,
+                )
+        self.glb_converter.set_alpha_hint_mask(None)
 
         # Judge the meshes
         grid_views_from_num_samples = None

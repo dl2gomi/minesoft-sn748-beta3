@@ -11,6 +11,7 @@ from modules.converters.params import GLBConverterParams
 from modules.mesh_generator.settings import TrellisConfig
 from modules.image_edit.settings import QwenConfig
 from modules.judge.settings import JudgeConfig
+from modules.perceptual_refiner.settings import PerceptualRefinerConfig
 
 config_dir = Path(__file__).parent
 config_file_dir = Path(__file__).parent.parent / "configuration.yaml"
@@ -47,6 +48,7 @@ class SettingsConf(BaseSettings):
     qwen: QwenConfig
     background_removal: BackgroundRemovalConfig
     glb_converter: GLBConverterParams
+    perceptual_refiner: PerceptualRefinerConfig = PerceptualRefinerConfig()
     model_versions: ModelVersionsConfig        
     judge: JudgeConfig
     
