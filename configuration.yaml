@@ -32,6 +32,18 @@ trellis:
     pipeline_type: "1024_cascade"  # "512_simple", "1024_cascade"
     mode: "multidiffusion"  # "singleview", "multiview"
     num_samples: 2
+    shell_cleanup:
+      one_hop:
+        enabled: true
+        distance_max_scale: 2.7
+        opposite_dot_max: -0.2
+        hit_ratio_threshold: 0.5
+        bin_scale: 1.5
+        hop_mode: 1
+        launch_chunk_size: 500000
+        progress_log_every_bins: 200
+        use_tqdm: true
+        tqdm_mininterval: 1.0
 
 # Qwen model settings
 qwen:

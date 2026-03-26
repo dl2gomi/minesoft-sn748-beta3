@@ -50,6 +50,7 @@ class MeshGeneratorModule:
                 sparse_structure_sampler_params=params.sparse_structure.model_dump(),
                 shape_slat_sampler_params=params.shape_slat.model_dump(),
                 tex_slat_sampler_params=params.tex_slat.model_dump(),
+                shell_cleanup_params=params.shell_cleanup.model_dump(),
                 mode=params.mode,
                 pipeline_type=params.pipeline_type,
                 max_num_tokens=params.max_num_tokens,
