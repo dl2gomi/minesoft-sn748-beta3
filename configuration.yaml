@@ -68,8 +68,8 @@ glb_converter:
     band: 1
     project: 0.1
     decimation_target: 250000
-    remove_inner_faces: true
-    verbose: true
+    remove_inner_faces: false
+    verbose: false
     smoothing:
       enabled: true
       iterations: 5
@@ -79,6 +79,8 @@ glb_converter:
     mesh_cluster_refine_iterations: 0
     mesh_cluster_smooth_strength: 0.15
     mesh_cluster_threshold_cone_half_angle: 90
+    # xatlas pack_charts block_align (see cumesh/cumesh/xatlas.py pack_charts)
+    xatlas_pack_block_align: true
   subdivision:
     iterations: 1
     vertex_reproject: 0.1

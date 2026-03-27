@@ -29,6 +29,8 @@ class UVUnwrapParams(OverridableModel):
     mesh_cluster_global_iterations: int = 1
     mesh_cluster_smooth_strength: float = 1.0
     mesh_cluster_threshold_cone_half_angle: float = 90.0
+    # xatlas pack_charts: align charts to 4x4 blocks (often faster packing, slight texture waste).
+    xatlas_pack_block_align: bool = False
 
 
 class SubdivisionParams(OverridableModel):

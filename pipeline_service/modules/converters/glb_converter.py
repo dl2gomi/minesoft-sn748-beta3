@@ -286,9 +286,13 @@ class GLBConverter:
             cumesh_mesh.compute_charts(**compute_charts_kwargs)
             num_charts, _, _, _, _, _ = cumesh_mesh.read_atlas_charts()
 
+            xatlas_pack_charts_kwargs = {
+                "block_align": params.uv_unwrap.xatlas_pack_block_align,
+            }
             out_vertices, out_faces, out_uvs, out_vmaps = cumesh_mesh.uv_unwrap(
                 compute_charts_kwargs=compute_charts_kwargs,
                 xatlas_compute_charts_kwargs=xatlas_compute_charts_kwargs,
+                xatlas_pack_charts_kwargs=xatlas_pack_charts_kwargs,
                 return_vmaps=True,
                 verbose=True,
             )
