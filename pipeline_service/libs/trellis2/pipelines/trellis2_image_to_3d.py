@@ -9,6 +9,7 @@ from . import samplers, rembg
 from ..modules.sparse import SparseTensor
 from ..modules import image_feature_extractor
 from ..representations import Mesh, MeshWithVoxel
+from geometry.mesh.schemas import MeshData
 
 
 class Trellis2ImageTo3DPipeline(Pipeline):
@@ -444,9 +445,10 @@ class Trellis2ImageTo3DPipeline(Pipeline):
 
             for m, v in zip(meshes, tex_voxels):
                 m.fill_holes()
+                mesh_data = MeshData(vertices=m.vertices, faces=m.faces)
                 out_mesh.append(
                     MeshWithVoxel(
-                        m.vertices, m.faces,
+                        mesh_data.vertices, mesh_data.faces,
                         origin = [-0.5, -0.5, -0.5],
                         voxel_size = 1 / resolution,
                         coords = v.coords[:, 1:],

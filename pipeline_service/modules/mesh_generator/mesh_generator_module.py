@@ -59,7 +59,7 @@ class MeshGeneratorModule:
             # Simplify meshes before converting to output format
             for mesh in meshes:
                 mesh.simplify()
-                
+
             meshes_data = tuple(MeshDataWithAttributeGrid.from_mesh_with_voxels(mesh) for mesh in meshes)
 
             generation_time = time.time() - start

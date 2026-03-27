@@ -68,6 +68,8 @@ glb_converter:
     band: 1
     project: 0.1
     decimation_target: 250000
+    remove_inner_faces: true
+    verbose: true
     smoothing:
       enabled: true
       iterations: 5

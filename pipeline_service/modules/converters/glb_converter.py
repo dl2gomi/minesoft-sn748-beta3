@@ -12,7 +12,6 @@ from torchvision.transforms.functional import to_pil_image
 from geometry.mesh.schemas import DEFAULT_AABB, MeshData, MeshDataWithAttributeGrid, AttributeGrid
 from geometry.texturing.dithering import bayer_dither_pattern
 from geometry.mesh.utils import sort_mesh, map_vertices_positions, count_boundary_loops
-from geometry.mesh.internal_shells import remove_internal_enclosed_shells
 from geometry.mesh.subdivisions import subdivide_egdes
 from geometry.mesh.smoothing import taubin_smooth
 from geometry.texturing.utils import dilate_attributes, map_mesh_rasterization, rasterize_mesh_data, sample_grid_attributes
@@ -64,8 +63,7 @@ class GLBConverter:
             mesh_data = self._remesh_mesh(original_mesh_data, params)
         else:
             mesh_data = self._cleanup_mesh(original_mesh_data, params)
-        mesh_data = remove_internal_enclosed_shells(mesh_data)
-            
+
         # 3. UV unwrap the mesh
         mesh_data = self._uv_unwrap_mesh(mesh_data, params)
 
@@ -149,7 +147,7 @@ class GLBConverter:
                 cumesh_mesh.init(smoothed_vertices, original_mesh_data.faces)
 
             # Step 1: Aggressive simplification (3x target)
-            cumesh_mesh.simplify(params.remesh.decimation_target * 3, verbose=False)
+            cumesh_mesh.simplify(params.remesh.decimation_target * 3, verbose=params.remesh.verbose)
             logger.debug(f"After initial simplification: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
             
             # Step 2: Clean up topology (duplicates, non-manifolds, isolated parts)
@@ -160,7 +158,7 @@ class GLBConverter:
             logger.debug(f"After initial cleanup: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
                 
             # Step 3: Final simplification to target count
-            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=False)
+            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=params.remesh.verbose)
             logger.debug(f"After final simplification: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
             
             # Step 4: Final Cleanup loop
@@ -231,14 +229,15 @@ class GLBConverter:
                 resolution=resolution,
                 band=params.remesh.band,
                 project_back=params.remesh.project,  # Snaps vertices back to original surface
-                verbose=False,
+                verbose=params.remesh.verbose,
                 bvh=original_mesh_data.bvh,
+                remove_inner_faces=params.remesh.remove_inner_faces,
             )
             cumesh_mesh.init(vertices, faces)
             logger.debug(f"After remeshing: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
             
             # Simplify and clean the remeshed result
-            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=False)
+            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=params.remesh.verbose)
             logger.debug(f"After simplifying: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
 
             # Extract remeshed data
