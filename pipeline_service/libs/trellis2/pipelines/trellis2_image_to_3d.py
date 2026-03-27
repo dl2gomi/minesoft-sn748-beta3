@@ -9,7 +9,6 @@ from . import samplers, rembg
 from ..modules.sparse import SparseTensor
 from ..modules import image_feature_extractor
 from ..representations import Mesh, MeshWithVoxel
-from geometry.mesh.internal_faces_onehop import remove_internal_faces_onehop_cuda
 from geometry.mesh.schemas import MeshData
 
 
@@ -418,7 +417,6 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         shape_slat: SparseTensor,
         tex_slat: SparseTensor,
         resolution: int,
-        shell_cleanup_params: Optional[dict] = None,
     ) -> List[MeshWithVoxel]:
         """
         Decode the latent codes.
@@ -435,8 +433,6 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             )
 
         out_mesh = []
-        shell_cleanup_params = shell_cleanup_params or {}
-        onehop_params = shell_cleanup_params.get("one_hop") or {}
 
         for sample_idx in range(shape_slat.shape[0]):
             shape_slat_i = shape_slat[sample_idx]
@@ -450,11 +446,6 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             for m, v in zip(meshes, tex_voxels):
                 m.fill_holes()
                 mesh_data = MeshData(vertices=m.vertices, faces=m.faces)
-                mesh_data = remove_internal_faces_onehop_cuda(
-                    mesh_data,
-                    exact_voxel_size=(1.0 / float(resolution)),
-                    **onehop_params,
-                )
                 out_mesh.append(
                     MeshWithVoxel(
                         mesh_data.vertices, mesh_data.faces,
@@ -564,7 +555,6 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         return_latent: bool = False,
         pipeline_type: Optional[str] = None,
         max_num_tokens: int = 49152,
-        shell_cleanup_params: Optional[dict] = None,
     ) -> List[MeshWithVoxel]:
         """
         Run the pipeline.
@@ -665,7 +655,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                 generator=generator
             )
         torch.cuda.empty_cache()
-        out_mesh = self.decode_latent(shape_slat, tex_slat, res, shell_cleanup_params=shell_cleanup_params)
+        out_mesh = self.decode_latent(shape_slat, tex_slat, res)
         if return_latent:
             return out_mesh, (shape_slat, tex_slat, res)
         else:
@@ -683,7 +673,6 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         return_latent: bool = False,
         pipeline_type: Optional[str] = None,
         max_num_tokens: int = 49152,
-        shell_cleanup_params: Optional[dict] = None,
         mode: Literal['stochastic', 'multidiffusion'] = 'stochastic',
     ) -> List[MeshWithVoxel]:
         """
@@ -804,7 +793,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                 )
 
         torch.cuda.empty_cache()
-        out_mesh = self.decode_latent(shape_slat, tex_slat, res, shell_cleanup_params=shell_cleanup_params)
+        out_mesh = self.decode_latent(shape_slat, tex_slat, res)
         if return_latent:
             return out_mesh, (shape_slat, tex_slat, res)
         else:

@@ -63,7 +63,7 @@ class GLBConverter:
             mesh_data = self._remesh_mesh(original_mesh_data, params)
         else:
             mesh_data = self._cleanup_mesh(original_mesh_data, params)
-            
+
         # 3. UV unwrap the mesh
         mesh_data = self._uv_unwrap_mesh(mesh_data, params)
 
@@ -78,14 +78,7 @@ class GLBConverter:
         base_color, orm_texture = self._texture_postprocess(attributes, attributes_layout, params)
 
         # 7. Create the textured mesh
-        voxel_size_ref = float(original_mesh_data.attrs.voxel_size.max().item())
-        textured_mesh = self._create_textured_mesh(
-            mesh_data,
-            base_color,
-            orm_texture,
-            params,
-            voxel_size_ref=voxel_size_ref,
-        )
+        textured_mesh = self._create_textured_mesh(mesh_data, base_color, orm_texture, params)
 
         return GLBConverterOutput(glb_mesh=textured_mesh)
 
@@ -154,7 +147,7 @@ class GLBConverter:
                 cumesh_mesh.init(smoothed_vertices, original_mesh_data.faces)
 
             # Step 1: Aggressive simplification (3x target)
-            cumesh_mesh.simplify(params.remesh.decimation_target * 3, verbose=False)
+            cumesh_mesh.simplify(params.remesh.decimation_target * 3, verbose=params.remesh.verbose)
             logger.debug(f"After initial simplification: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
             
             # Step 2: Clean up topology (duplicates, non-manifolds, isolated parts)
@@ -165,7 +158,7 @@ class GLBConverter:
             logger.debug(f"After initial cleanup: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
                 
             # Step 3: Final simplification to target count
-            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=False)
+            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=params.remesh.verbose)
             logger.debug(f"After final simplification: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
             
             # Step 4: Final Cleanup loop
@@ -236,14 +229,15 @@ class GLBConverter:
                 resolution=resolution,
                 band=params.remesh.band,
                 project_back=params.remesh.project,  # Snaps vertices back to original surface
-                verbose=False,
+                verbose=params.remesh.verbose,
                 bvh=original_mesh_data.bvh,
+                remove_inner_faces=params.remesh.remove_inner_faces,
             )
             cumesh_mesh.init(vertices, faces)
             logger.debug(f"After remeshing: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
             
             # Simplify and clean the remeshed result
-            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=False)
+            cumesh_mesh.simplify(params.remesh.decimation_target, verbose=params.remesh.verbose)
             logger.debug(f"After simplifying: {cumesh_mesh.num_vertices} vertices, {cumesh_mesh.num_faces} faces")
 
             # Extract remeshed data
@@ -405,15 +399,7 @@ class GLBConverter:
         logger.debug(f"Done finalizing mesh textures | Time: {time.time() - start_time:.2f}s")
         return base_color_texture, orm_texture
 
-    def _create_textured_mesh(
-        self,
-        mesh_data: MeshData,
-        base_color: Image.Image,
-        orm_texture: Image.Image,
-        params: GLBConverterParams,
-        *,
-        voxel_size_ref: float,
-    ) -> trimesh.Trimesh:
+    def _create_textured_mesh(self, mesh_data: MeshData, base_color: Image.Image, orm_texture: Image.Image, params: GLBConverterParams) -> trimesh.Trimesh:
         """Create a textured trimesh mesh from the mesh data and textures."""
         
         logger.debug("Creating textured mesh")
@@ -421,15 +407,6 @@ class GLBConverter:
 
         alpha_mode = params.texture.alpha_mode
         alpha_mode = AlphaMode.MASK if alpha_mode is AlphaMode.DITHER else alpha_mode
-
-        # Reserve one texel as a solid red marker for the voxel-size debug cube.
-        base_color_arr = np.array(base_color.convert("RGBA"), copy=True)
-        base_color_arr[0, 0] = np.array([255, 0, 0, 255], dtype=np.uint8)
-        base_color = Image.fromarray(base_color_arr, mode="RGBA")
-
-        orm_arr = np.array(orm_texture.convert("RGB"), copy=True)
-        orm_arr[0, 0] = np.array([255, 255, 0], dtype=np.uint8)  # occlusion=1, roughness=1, metallic=0
-        orm_texture = Image.fromarray(orm_arr, mode="RGB")
 
         # Create PBR material
         material = trimesh.visual.material.PBRMaterial(
@@ -454,26 +431,6 @@ class GLBConverter:
         normals_np[:, 1], normals_np[:, 2] = normals_np[:, 2], -normals_np[:, 1]
         uvs_np[:, 1] = 1 - uvs_np[:, 1]  # Flip UV V-coordinate
         
-        # Append a 100x-voxel red cube above the mesh for visual voxel-size reference.
-        voxel_size = float(voxel_size_ref)
-        if voxel_size > 0.0:
-            debug_scale = 100.0
-            cube_edge = voxel_size * debug_scale
-            cube_center = np.array([0.0, 0.0, 0.0], dtype=vertices_np.dtype)
-            cube = trimesh.creation.box(extents=[cube_edge, cube_edge, cube_edge])
-            cube.apply_translation(cube_center)
-
-            cube_vertices = cube.vertices.astype(vertices_np.dtype, copy=False)
-            cube_faces = cube.faces.astype(faces_np.dtype, copy=False) + vertices_np.shape[0]
-            cube_normals = cube.vertex_normals.astype(normals_np.dtype, copy=False)
-            cube_uvs = np.zeros((cube_vertices.shape[0], 2), dtype=uvs_np.dtype)
-
-            vertices_np = np.concatenate([vertices_np, cube_vertices], axis=0)
-            faces_np = np.concatenate([faces_np, cube_faces], axis=0)
-            normals_np = np.concatenate([normals_np, cube_normals], axis=0)
-            uvs_np = np.concatenate([uvs_np, cube_uvs], axis=0)
-            logger.warning(f"voxel_debug_cube added | voxel={voxel_size:.8f} edge={cube_edge:.8f}")
-
         textured_mesh = trimesh.Trimesh(
             vertices=vertices_np,
             faces=faces_np,

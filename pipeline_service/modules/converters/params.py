@@ -17,6 +17,10 @@ class RemeshParams(OverridableModel):
     project: float = 0.0
     decimation_target: int = 1000000
     smoothing: SmoothingParams = SmoothingParams()
+    # Narrow-band DC only (remesh_narrow_band_dc): drop faces classified as inner shell.
+    remove_inner_faces: bool = False
+    # Pass-through to cumesh remesh/simplify progress (tqdm / prints); noisy when True.
+    verbose: bool = False
 
 
 class UVUnwrapParams(OverridableModel):
@@ -38,6 +42,7 @@ class TextureParams(OverridableModel):
     texture_size: int = 1024
     alpha_mode: AlphaMode = AlphaMode.OPAQUE
     alpha_gamma: float = 2.2
+
 
 class GLBConverterParams(OverridableModel):
     """GLB conversion parameters with stage-specific nested overrides."""
